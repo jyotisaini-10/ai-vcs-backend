@@ -4,7 +4,7 @@ dotenv.config()
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 const res = await groq.chat.completions.create({
-  model: 'llama3-8b-8192',
+  model: 'llama-3.3-70b-versatile',
   max_tokens: 50,
   messages: [{ role: 'user', content: 'Say hello in one word' }]
 })
