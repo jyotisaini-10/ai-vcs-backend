@@ -19,12 +19,17 @@ dotenv.config()
 
 const app = express()
 const httpServer = createServer(app)
+const allowedOrigins = [
+  'http://localhost:3000',
+  process.env.FRONTEND_URL
+].filter(Boolean)
+
 const io = new Server(httpServer, {
-  cors: { origin: 'http://localhost:3000', methods: ['GET', 'POST'] }
+  cors: { origin: allowedOrigins, methods: ['GET', 'POST'] }
 })
 
 // Middleware MUST come before all route registrations so req.body is parsed
-app.use(cors({ origin: 'http://localhost:3000' }))
+app.use(cors({ origin: allowedOrigins }))
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true }))
 
@@ -38,6 +43,7 @@ app.use('/api/repos', issueRoutes)
 app.use('/api/repos', pullRoutes)
 app.use('/api/repos', discussionRoutes)
 
+app.get('/', (req, res) => res.json({ message: 'AI VCS API is running' }))
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }))
 
 app.use(errorHandler)
@@ -53,9 +59,11 @@ mongoose
   .connect(process.env.MONGODB_URI)
   .then(() => {
     console.log('MongoDB connected')
-    httpServer.listen(process.env.PORT, () =>
-      console.log(`Server running on port ${process.env.PORT}`)
-    )
+    if (process.env.VERCEL !== '1') {
+      httpServer.listen(process.env.PORT, () =>
+        console.log(`Server running on port ${process.env.PORT}`)
+      )
+    }
   })
   .catch((err) => {
     console.error('MongoDB connection error:', err)
@@ -68,3 +76,5 @@ httpServer.on('error', (err) => {
     process.exit(1)
   }
 })
+
+export default app
