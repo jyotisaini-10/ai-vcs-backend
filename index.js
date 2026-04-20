@@ -1,8 +1,6 @@
 import express from 'express'
 import cors from 'cors'
 import dotenv from 'dotenv'
-import { createServer } from 'http'
-import { Server } from 'socket.io'
 import mongoose from 'mongoose'
 
 import authRoutes from './routes/auth.js'
@@ -14,30 +12,16 @@ import issueRoutes from './routes/issues.js'
 import pullRoutes from './routes/pullrequests.js'
 import discussionRoutes from './routes/discussions.js'
 
-
 dotenv.config()
 
 const app = express()
-const httpServer = createServer(app)
-const allowedOrigins = [
-  'http://localhost:3000',
-  process.env.FRONTEND_URL
-].filter(Boolean)
 
-const io = new Server(httpServer, {
-  cors: { origin: allowedOrigins, methods: ['GET', 'POST'] }
-})
-
-// Middleware MUST come before all route registrations so req.body is parsed
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}))
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }))
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true }))
 
-app.set('io', io)
+// Fake io object so existing code doesn't break
+app.set('io', { to: () => ({ emit: () => { } }) })
 
 app.use('/api/auth', authRoutes)
 app.use('/api/repos', repoRoutes)
@@ -52,33 +36,28 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok' }))
 
 app.use(errorHandler)
 
-io.on('connection', (socket) => {
-  socket.on('join-repo', (repoId) => socket.join(repoId))
-  socket.on('leave-repo', (repoId) => socket.leave(repoId))
-})
+// Connect to MongoDB
+let isConnected = false
+const connectDB = async () => {
+  if (isConnected) return
+  await mongoose.connect(process.env.MONGODB_URI)
+  isConnected = true
+  console.log('MongoDB connected')
+}
 
-process.on('exit', () => httpServer.close())
-
-mongoose
-  .connect(process.env.MONGODB_URI)
-  .then(() => {
-    console.log('MongoDB connected')
-    if (process.env.VERCEL !== '1') {
-      httpServer.listen(process.env.PORT, () =>
-        console.log(`Server running on port ${process.env.PORT}`)
-      )
-    }
+// For local development
+if (process.env.NODE_ENV !== 'production') {
+  connectDB().then(() => {
+    app.listen(process.env.PORT || 5000, () =>
+      console.log(`Server running on port ${process.env.PORT || 5000}`)
+    )
   })
-  .catch((err) => {
-    console.error('MongoDB connection error:', err)
-    process.exit(1)
-  })
+}
 
-httpServer.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(`Port busy! Run: npx kill-port ${process.env.PORT}`)
-    process.exit(1)
-  }
+// For Vercel - connect on each request
+app.use(async (req, res, next) => {
+  await connectDB()
+  next()
 })
 
 export default app
