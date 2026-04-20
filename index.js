@@ -20,9 +20,39 @@ app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', '
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true }))
 
-// Fake io object so existing code doesn't break
 app.set('io', { to: () => ({ emit: () => { } }) })
 
+// ✅ MOVED UP - Connect to MongoDB BEFORE routes
+let isConnected = false
+const connectDB = async () => {
+  if (isConnected) return
+  if (!process.env.MONGODB_URI) {
+    console.error('MONGODB_URI is not defined in environment variables')
+    return
+  }
+  try {
+    await mongoose.connect(process.env.MONGODB_URI)
+    isConnected = true
+    console.log('MongoDB connected successfully')
+  } catch (err) {
+    console.error('MongoDB connection error:', err.message)
+  }
+}
+
+// ✅ DB middleware BEFORE routes
+app.use(async (req, res, next) => {
+  try {
+    await connectDB()
+    if (!isConnected && req.path !== '/api/health' && req.path !== '/') {
+      return res.status(503).json({ message: 'Database connection failed. Please check MONGODB_URI and IP whitelist.' })
+    }
+    next()
+  } catch (err) {
+    next(err)
+  }
+})
+
+// Routes come AFTER the DB middleware
 app.use('/api/auth', authRoutes)
 app.use('/api/repos', repoRoutes)
 app.use('/api/repos', commitRoutes)
@@ -36,16 +66,7 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok' }))
 
 app.use(errorHandler)
 
-// Connect to MongoDB
-let isConnected = false
-const connectDB = async () => {
-  if (isConnected) return
-  await mongoose.connect(process.env.MONGODB_URI)
-  isConnected = true
-  console.log('MongoDB connected')
-}
-
-// For local development
+// Local development only
 if (process.env.NODE_ENV !== 'production') {
   connectDB().then(() => {
     app.listen(process.env.PORT || 5000, () =>
@@ -53,11 +74,5 @@ if (process.env.NODE_ENV !== 'production') {
     )
   })
 }
-
-// For Vercel - connect on each request
-app.use(async (req, res, next) => {
-  await connectDB()
-  next()
-})
 
 export default app
