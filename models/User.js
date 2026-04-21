@@ -45,6 +45,8 @@ const UserSchema = new Schema(
       maxlength: 100
     },
     repos: [{ type: Schema.Types.ObjectId, ref: 'Repo' }],
+    followers: [{ type: Schema.Types.ObjectId, ref: 'User' }],
+    following: [{ type: Schema.Types.ObjectId, ref: 'User' }],
     resetPasswordToken: { type: String },
     resetPasswordExpires: { type: Date }
   },
