@@ -2,6 +2,7 @@ import git from 'isomorphic-git'
 import { promises as fs } from 'fs'
 import path from 'path'
 import dotenv from 'dotenv'
+import Commit from '../../models/Commit.js'
 
 dotenv.config()
 
@@ -11,12 +12,81 @@ export function repoPath(repoId) {
   return path.join(REPOS_DIR, repoId.toString())
 }
 
+/**
+ * Rebuilds the git working directory from MongoDB commit history.
+ * Called whenever /tmp is wiped on a Vercel cold start.
+ */
+async function rebuildRepoFromDB(repoId) {
+  const dir = repoPath(repoId)
+  await fs.mkdir(dir, { recursive: true })
+  await git.init({ fs, dir, defaultBranch: 'main' })
+
+  // Fetch all commits for this repo in chronological order
+  const commits = await Commit.find({ repoId })
+    .sort({ createdAt: 1 })
+    .lean()
+
+  if (commits.length === 0) {
+    // No commits yet — just create a placeholder so HEAD exists
+    const placeholder = path.join(dir, '.gitkeep')
+    await fs.writeFile(placeholder, '')
+    await git.add({ fs, dir, filepath: '.gitkeep' })
+    await git.commit({
+      fs, dir,
+      message: 'Initial commit',
+      author: { name: 'AI-VCS', email: 'system@ai-vcs.dev' }
+    })
+    return
+  }
+
+  // Replay each commit: write files then commit
+  for (const commit of commits) {
+    const filesWithContent = (commit.filesChanged || []).filter(f => f.content && f.status !== 'deleted')
+    if (filesWithContent.length === 0) continue
+
+    for (const file of filesWithContent) {
+      const filePath = path.join(dir, file.filename)
+      await fs.mkdir(path.dirname(filePath), { recursive: true })
+      await fs.writeFile(filePath, file.content)
+      await git.add({ fs, dir, filepath: file.filename })
+    }
+
+    // Handle deleted files
+    const deletedFiles = (commit.filesChanged || []).filter(f => f.status === 'deleted')
+    for (const file of deletedFiles) {
+      try {
+        await fs.unlink(path.join(dir, file.filename))
+        await git.remove({ fs, dir, filepath: file.filename })
+      } catch {}
+    }
+
+    await git.commit({
+      fs, dir,
+      message: commit.message,
+      author: { name: 'AI-VCS', email: 'system@ai-vcs.dev' }
+    })
+  }
+}
+
+/**
+ * Ensures the git repo exists in /tmp. If missing, rebuilds from DB.
+ */
+async function ensureRepo(repoId) {
+  const dir = repoPath(repoId)
+  const gitDir = path.join(dir, '.git')
+  try {
+    await fs.access(gitDir)
+  } catch {
+    console.log(`[gitService] Repo ${repoId} missing from disk — rebuilding from DB...`)
+    await rebuildRepoFromDB(repoId)
+  }
+}
+
 export async function initRepo(repoId) {
   const dir = repoPath(repoId)
   await fs.mkdir(dir, { recursive: true })
   await git.init({ fs, dir, defaultBranch: 'main' })
 
-  // Create initial README
   const readmePath = path.join(dir, 'README.md')
   await fs.writeFile(readmePath, `# Repository\n\nCreated with AI-VCS\n`)
   await git.add({ fs, dir, filepath: 'README.md' })
@@ -31,26 +101,11 @@ export async function initRepo(repoId) {
 
 export async function writeAndCommit({ repoId, files, message, author, branch = 'main' }) {
   const dir = repoPath(repoId)
+
+  // Ensure repo is present (rebuild from DB if cold start wiped /tmp)
+  await ensureRepo(repoId)
+
   const fileStats = []
-
-  // Auto-init git repo if it doesn't exist (e.g. Vercel cold start wiped /tmp)
-  const gitDir = path.join(dir, '.git')
-  let gitExists = false
-  try { await fs.access(gitDir); gitExists = true } catch { gitExists = false }
-
-  if (!gitExists) {
-    await fs.mkdir(dir, { recursive: true })
-    await git.init({ fs, dir, defaultBranch: 'main' })
-    // Create a placeholder initial commit so HEAD exists
-    const placeholderPath = path.join(dir, '.gitkeep')
-    await fs.writeFile(placeholderPath, '')
-    await git.add({ fs, dir, filepath: '.gitkeep' })
-    await git.commit({
-      fs, dir,
-      message: 'Initial commit',
-      author: { name: 'AI-VCS', email: 'system@ai-vcs.dev' }
-    })
-  }
 
   for (const file of files) {
     const filePath = path.join(dir, file.name)
@@ -67,7 +122,8 @@ export async function writeAndCommit({ repoId, files, message, author, branch = 
       filename: file.name,
       status,
       additions: file.content.split('\n').length,
-      deletions: 0
+      deletions: 0,
+      content: file.content  // ← persist content in DB
     })
   }
 
@@ -85,21 +141,16 @@ export async function getCommitDiff(repoId, sha) {
   const dir = repoPath(repoId)
   const diffs = []
 
-  // If git repo doesn't exist (cold start wiped /tmp), return empty diffs
-  try { await fs.access(path.join(dir, '.git')) } catch { return diffs }
+  // Ensure repo is present
+  await ensureRepo(repoId)
 
   try {
     const log = await git.log({ fs, dir, depth: 2, ref: sha })
 
     if (log.length < 2) {
-      // First commit — compare against empty tree
       const files = await git.listFiles({ fs, dir, ref: sha })
       for (const filepath of files) {
-        const { blob } = await git.readBlob({
-          fs, dir,
-          oid: sha,
-          filepath
-        })
+        const { blob } = await git.readBlob({ fs, dir, oid: sha, filepath })
         const content = new TextDecoder().decode(blob)
         diffs.push({ file: filepath, before: '', after: content, type: 'added' })
       }
@@ -139,6 +190,7 @@ export async function getCommitDiff(repoId, sha) {
 export async function getLog(repoId, branch = 'main', depth = 50) {
   const dir = repoPath(repoId)
   try {
+    await ensureRepo(repoId)
     const log = await git.log({ fs, dir, ref: branch, depth })
     return log
   } catch {
@@ -148,11 +200,13 @@ export async function getLog(repoId, branch = 'main', depth = 50) {
 
 export async function getBranches(repoId) {
   const dir = repoPath(repoId)
+  await ensureRepo(repoId)
   return git.listBranches({ fs, dir })
 }
 
 export async function createBranch(repoId, branchName, fromBranch = 'main') {
   const dir = repoPath(repoId)
+  await ensureRepo(repoId)
   await git.checkout({ fs, dir, ref: fromBranch })
   await git.branch({ fs, dir, ref: branchName })
   return branchName
@@ -161,7 +215,7 @@ export async function createBranch(repoId, branchName, fromBranch = 'main') {
 export async function getFileTree(repoId, branch = 'main') {
   const dir = repoPath(repoId)
   try {
-    await fs.access(path.join(dir, '.git'))
+    await ensureRepo(repoId)
     const sha = await git.resolveRef({ fs, dir, ref: branch })
     const files = await git.listFiles({ fs, dir, ref: sha })
     return files
@@ -172,6 +226,7 @@ export async function getFileTree(repoId, branch = 'main') {
 
 export async function readFile(repoId, filepath, branch = 'main') {
   const dir = repoPath(repoId)
+  await ensureRepo(repoId)
   const sha = await git.resolveRef({ fs, dir, ref: branch })
   const { blob } = await git.readBlob({ fs, dir, oid: sha, filepath })
   return new TextDecoder().decode(blob)

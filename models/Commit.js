@@ -17,7 +17,8 @@ const FileChangeSchema = new Schema({
   filename: String,
   status: { type: String, enum: ['added', 'modified', 'deleted'] },
   additions: { type: Number, default: 0 },
-  deletions: { type: Number, default: 0 }
+  deletions: { type: Number, default: 0 },
+  content: { type: String, default: '' }  // persisted file content for serverless environments
 })
 
 const CommitSchema = new Schema(
