@@ -7,7 +7,6 @@ import { auth } from '../middleware/auth.js'
 
 const router = express.Router()
 
-// Email transporter (Gmail)
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
@@ -24,14 +23,11 @@ function signToken(userId) {
 router.post('/register', async (req, res, next) => {
   try {
     const { username, email, password } = req.body
-
     if (!username || !email || !password) {
       return res.status(400).json({ message: 'All fields are required' })
     }
-
     const user = await User.create({ username, email, password })
     const token = signToken(user._id)
-
     res.status(201).json({ user, token })
   } catch (err) {
     next(err)
@@ -42,17 +38,10 @@ router.post('/register', async (req, res, next) => {
 router.post('/login', async (req, res, next) => {
   try {
     const { email, password } = req.body
-
     const user = await User.findOne({ email })
-    if (!user) {
-      return res.status(401).json({ message: 'Invalid credentials' })
-    }
-
+    if (!user) return res.status(401).json({ message: 'Invalid credentials' })
     const valid = await user.comparePassword(password)
-    if (!valid) {
-      return res.status(401).json({ message: 'Invalid credentials' })
-    }
-
+    if (!valid) return res.status(401).json({ message: 'Invalid credentials' })
     const token = signToken(user._id)
     res.json({ user, token })
   } catch (err) {
@@ -65,20 +54,47 @@ router.get('/me', auth, async (req, res) => {
   res.json({ user: req.user })
 })
 
+// PATCH /api/auth/profile
+router.patch('/profile', auth, async (req, res, next) => {
+  try {
+    const { username, bio, location, website, currentPassword, newPassword } = req.body
+
+    const user = await User.findById(req.user._id).select('+password')
+
+    if (username && username !== user.username) {
+      const exists = await User.findOne({ username, _id: { $ne: user._id } })
+      if (exists) return res.status(400).json({ message: 'Username already taken' })
+      user.username = username
+    }
+
+    if (bio !== undefined) user.bio = bio
+    if (location !== undefined) user.location = location
+    if (website !== undefined) user.website = website
+
+    if (currentPassword && newPassword) {
+      const valid = await user.comparePassword(currentPassword)
+      if (!valid) return res.status(400).json({ message: 'Current password is incorrect' })
+      if (newPassword.length < 6) return res.status(400).json({ message: 'New password must be at least 6 characters' })
+      user.password = newPassword
+    }
+
+    await user.save()
+    res.json({ user })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // POST /api/auth/forgot-password
 router.post('/forgot-password', async (req, res) => {
   try {
     const { email } = req.body
     const user = await User.findOne({ email })
-    if (!user) {
-      // Don't reveal if user exists
-      return res.json({ message: 'If that email exists, a reset link has been sent.' })
-    }
+    if (!user) return res.json({ message: 'If that email exists, a reset link has been sent.' })
 
-    // Generate token
     const token = crypto.randomBytes(32).toString('hex')
     user.resetPasswordToken = crypto.createHash('sha256').update(token).digest('hex')
-    user.resetPasswordExpires = Date.now() + 60 * 60 * 1000 // 1 hour
+    user.resetPasswordExpires = Date.now() + 60 * 60 * 1000
     await user.save({ validateBeforeSave: false })
 
     const resetUrl = `${process.env.CLIENT_URL}/reset-password?token=${token}`

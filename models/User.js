@@ -29,6 +29,21 @@ const UserSchema = new Schema(
       type: String,
       default: ''
     },
+    bio: {
+      type: String,
+      default: '',
+      maxlength: 160
+    },
+    location: {
+      type: String,
+      default: '',
+      maxlength: 60
+    },
+    website: {
+      type: String,
+      default: '',
+      maxlength: 100
+    },
     repos: [{ type: Schema.Types.ObjectId, ref: 'Repo' }],
     resetPasswordToken: { type: String },
     resetPasswordExpires: { type: Date }
