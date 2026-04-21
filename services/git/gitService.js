@@ -33,6 +33,25 @@ export async function writeAndCommit({ repoId, files, message, author, branch = 
   const dir = repoPath(repoId)
   const fileStats = []
 
+  // Auto-init git repo if it doesn't exist (e.g. Vercel cold start wiped /tmp)
+  const gitDir = path.join(dir, '.git')
+  let gitExists = false
+  try { await fs.access(gitDir); gitExists = true } catch { gitExists = false }
+
+  if (!gitExists) {
+    await fs.mkdir(dir, { recursive: true })
+    await git.init({ fs, dir, defaultBranch: 'main' })
+    // Create a placeholder initial commit so HEAD exists
+    const placeholderPath = path.join(dir, '.gitkeep')
+    await fs.writeFile(placeholderPath, '')
+    await git.add({ fs, dir, filepath: '.gitkeep' })
+    await git.commit({
+      fs, dir,
+      message: 'Initial commit',
+      author: { name: 'AI-VCS', email: 'system@ai-vcs.dev' }
+    })
+  }
+
   for (const file of files) {
     const filePath = path.join(dir, file.name)
     const fileDir = path.dirname(filePath)
@@ -65,6 +84,9 @@ export async function writeAndCommit({ repoId, files, message, author, branch = 
 export async function getCommitDiff(repoId, sha) {
   const dir = repoPath(repoId)
   const diffs = []
+
+  // If git repo doesn't exist (cold start wiped /tmp), return empty diffs
+  try { await fs.access(path.join(dir, '.git')) } catch { return diffs }
 
   try {
     const log = await git.log({ fs, dir, depth: 2, ref: sha })
@@ -139,6 +161,7 @@ export async function createBranch(repoId, branchName, fromBranch = 'main') {
 export async function getFileTree(repoId, branch = 'main') {
   const dir = repoPath(repoId)
   try {
+    await fs.access(path.join(dir, '.git'))
     const sha = await git.resolveRef({ fs, dir, ref: branch })
     const files = await git.listFiles({ fs, dir, ref: sha })
     return files
