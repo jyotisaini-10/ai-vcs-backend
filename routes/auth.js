@@ -7,7 +7,8 @@ import { auth } from '../middleware/auth.js'
 
 const router = express.Router()
 
-const resend = new Resend(process.env.RESEND_API_KEY)
+// Only initialize Resend if the API key is provided so it doesn't crash the entire server
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null
 
 function signToken(userId) {
   return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' })
@@ -93,6 +94,11 @@ router.post('/forgot-password', async (req, res) => {
 
     const resetUrl = `${process.env.CLIENT_URL}/reset-password?token=${token}`
 
+    if (!resend) {
+      console.error('RESEND_API_KEY is missing. Cannot send email.')
+      return res.status(500).json({ message: 'Server email configuration is missing.' })
+    }
+
     const { error } = await resend.emails.send({
       from: 'AI-VCS <onboarding@resend.dev>',
       to: [user.email],
@@ -110,7 +116,7 @@ router.post('/forgot-password', async (req, res) => {
 
     if (error) {
       console.error('Resend email error:', error)
-      return res.status(500).json({ message: 'Failed to send reset email. Please try again.' })
+      return res.status(500).json({ message: error.message || 'Failed to send reset email. Please try again.' })
     }
 
     res.json({ message: 'If that email exists, a reset link has been sent.' })
