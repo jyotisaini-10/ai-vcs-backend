@@ -1,19 +1,13 @@
 import express from 'express'
 import jwt from 'jsonwebtoken'
 import crypto from 'crypto'
-import nodemailer from 'nodemailer'
+import { Resend } from 'resend'
 import User from '../models/User.js'
 import { auth } from '../middleware/auth.js'
 
 const router = express.Router()
 
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  }
-})
+const resend = new Resend(process.env.RESEND_API_KEY)
 
 function signToken(userId) {
   return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' })
@@ -99,9 +93,9 @@ router.post('/forgot-password', async (req, res) => {
 
     const resetUrl = `${process.env.CLIENT_URL}/reset-password?token=${token}`
 
-    await transporter.sendMail({
-      from: `"AI-VCS" <${process.env.EMAIL_USER}>`,
-      to: user.email,
+    const { error } = await resend.emails.send({
+      from: 'AI-VCS <onboarding@resend.dev>',
+      to: [user.email],
       subject: 'Password Reset Request — AI-VCS',
       html: `
         <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px;background:#0d1117;color:#e6edf3;border-radius:12px;">
@@ -109,9 +103,15 @@ router.post('/forgot-password', async (req, res) => {
           <p style="color:#8b949e;margin-bottom:24px;">You requested a password reset for your AI-VCS account.</p>
           <a href="${resetUrl}" style="display:inline-block;padding:12px 24px;background:#7c3aed;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;">Reset Password</a>
           <p style="color:#8b949e;margin-top:24px;font-size:13px;">This link expires in 1 hour. If you didn't request this, ignore this email.</p>
+          <p style="color:#6e7681;margin-top:8px;font-size:12px;">Or copy this link: ${resetUrl}</p>
         </div>
       `
     })
+
+    if (error) {
+      console.error('Resend email error:', error)
+      return res.status(500).json({ message: 'Failed to send reset email. Please try again.' })
+    }
 
     res.json({ message: 'If that email exists, a reset link has been sent.' })
   } catch (err) {
