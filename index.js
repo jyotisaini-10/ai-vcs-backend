@@ -12,6 +12,7 @@ import issueRoutes from './routes/issues.js'
 import pullRoutes from './routes/pullrequests.js'
 import discussionRoutes from './routes/discussions.js'
 import exploreRoutes from './routes/explore.js'
+import gistRoutes from './routes/gists.js'
 
 dotenv.config()
 
@@ -62,6 +63,7 @@ app.use('/api/repos', issueRoutes)
 app.use('/api/repos', pullRoutes)
 app.use('/api/repos', discussionRoutes)
 app.use('/api/explore', exploreRoutes)
+app.use('/api/gists', gistRoutes)
 
 app.get('/', (req, res) => res.json({ message: 'AI VCS API is running' }))
 app.get('/api/health', (req, res) => res.json({ status: 'ok', db: isConnected }))
