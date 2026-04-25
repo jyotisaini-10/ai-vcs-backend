@@ -94,9 +94,15 @@ router.post('/forgot-password', async (req, res) => {
 
     const resetUrl = `${process.env.CLIENT_URL}/reset-password?token=${token}`
 
+    // 💡 Development Bypass: Always log the link to the console
+    console.log('-----------------------------------------')
+    console.log('🔑 PASSWORD RESET LINK (Check Console):')
+    console.log(resetUrl)
+    console.log('-----------------------------------------')
+
     if (!resend) {
-      console.error('RESEND_API_KEY is missing. Cannot send email.')
-      return res.status(500).json({ message: 'Server email configuration is missing.' })
+      console.warn('RESEND_API_KEY is missing. Reset link logged to console only.')
+      return res.json({ message: 'Development mode: Reset link has been logged to the server console.' })
     }
 
     const { error } = await resend.emails.send({
@@ -116,7 +122,13 @@ router.post('/forgot-password', async (req, res) => {
 
     if (error) {
       console.error('Resend email error:', error)
-      return res.status(500).json({ message: error.message || 'Failed to send reset email. Please try again.' })
+      // If it's a sandbox error, don't fail the request, just tell the user to check console
+      if (error.message?.includes('testing emails')) {
+        return res.json({ 
+          message: 'Resend is in Sandbox mode. The reset link has been logged to your SERVER TERMINAL for testing.' 
+        })
+      }
+      return res.status(500).json({ message: error.message || 'Failed to send reset email.' })
     }
 
     res.json({ message: 'If that email exists, a reset link has been sent.' })
