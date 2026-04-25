@@ -1,63 +1,50 @@
-import { promises as fs } from 'fs'
-import path from 'path'
 import { generateEmbedding } from '../ai/aiService.js'
-
-const STORE_DIR = process.env.REPOS_DIR || './repos'
-
-function storePath(repoId) {
-  return path.join(STORE_DIR, repoId.toString(), '.ai-index.json')
-}
+import VectorIndex from '../../models/VectorIndex.js'
 
 export async function loadStore(repoId) {
   try {
-    const raw = await fs.readFile(storePath(repoId), 'utf-8')
-    return JSON.parse(raw)
+    return await VectorIndex.find({ repoId }).lean()
   } catch {
     return []
   }
 }
 
-export async function saveStore(repoId, store) {
-  await fs.writeFile(storePath(repoId), JSON.stringify(store), 'utf-8')
-}
-
 export async function indexFile(repoId, filename, content) {
-  const store = await loadStore(repoId)
-
-  // Remove old entry for this file
-  const filtered = store.filter((e) => e.filename !== filename)
-
   const embedding = await generateEmbedding(`File: ${filename}\n\n${content}`)
 
-  filtered.push({
-    filename,
-    content: content.slice(0, 500),
-    embedding,
-    indexedAt: new Date().toISOString()
-  })
-
-  await saveStore(repoId, filtered)
+  await VectorIndex.findOneAndUpdate(
+    { repoId, filename },
+    {
+      content: content.slice(0, 800), // Store more context for search results
+      embedding,
+      indexedAt: new Date()
+    },
+    { upsert: true, new: true }
+  )
 }
 
 export async function indexMultipleFiles(repoId, files) {
-  const store = await loadStore(repoId)
-  const filenames = files.map((f) => f.name)
-  const filtered = store.filter((e) => !filenames.includes(e.filename))
+  if (!files || files.length === 0) return 0
 
-  const newEntries = await Promise.all(
+  const entries = await Promise.all(
     files.map(async (file) => {
       const embedding = await generateEmbedding(`File: ${file.name}\n\n${file.content}`)
       return {
-        filename: file.name,
-        content: file.content.slice(0, 500),
-        embedding,
-        indexedAt: new Date().toISOString()
+        updateOne: {
+          filter: { repoId, filename: file.name },
+          update: {
+            content: file.content.slice(0, 800),
+            embedding,
+            indexedAt: new Date()
+          },
+          upsert: true
+        }
       }
     })
   )
 
-  await saveStore(repoId, [...filtered, ...newEntries])
-  return newEntries.length
+  const result = await VectorIndex.bulkWrite(entries)
+  return result.upsertedCount + result.modifiedCount
 }
 
 export async function searchStore(repoId, queryEmbedding, topK = 5) {
@@ -74,11 +61,13 @@ export async function searchStore(repoId, queryEmbedding, topK = 5) {
 }
 
 function cosineSimilarity(a, b) {
+  if (!a || !b || a.length !== b.length) return 0
   let dot = 0, magA = 0, magB = 0
   for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i]
     magA += a[i] ** 2
     magB += b[i] ** 2
   }
-  return dot / (Math.sqrt(magA) * Math.sqrt(magB))
+  const denominator = Math.sqrt(magA) * Math.sqrt(magB)
+  return denominator === 0 ? 0 : dot / denominator
 }

@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import Commit from './models/Commit.js';
 import { analyzeImpact, reviewCode, generateCommitMessage } from './services/ai/aiService.js';
+import { indexMultipleFiles } from './services/storage/vectorStore.js';
 
 dotenv.config();
 
@@ -10,14 +11,8 @@ async function run() {
     await mongoose.connect(process.env.MONGODB_URI);
     console.log('Connected to MongoDB');
 
-    // Find commits that failed analysis or have fallback messages
-    const commits = await Commit.find({
-      $or: [
-        { impactSummary: 'Unable to analyze' },
-        { impactSummary: '' },
-        { aiStatus: 'failed' }
-      ]
-    });
+    // Find commits to re-analyze/re-index
+    const commits = await Commit.find({}).sort({ createdAt: 1 });
 
     console.log(`Found ${commits.length} commits to re-analyze.`);
 
@@ -43,15 +38,25 @@ async function run() {
           analyzeImpact(diffs)
         ]);
 
-        await Commit.findByIdAndUpdate(commit._id, {
-          aiMessage,
-          reviewComments,
-          impactScore: impact.score,
-          impactSummary: impact.summary,
-          aiStatus: 'complete'
-        });
+        // Re-index files for semantic search
+        const filesToIndex = (commit.filesChanged || []).map(f => ({
+          name: f.filename,
+          content: f.content || ''
+        }));
+        await indexMultipleFiles(commit.repoId, filesToIndex);
 
-        console.log(`✅ Successfully re-analyzed ${commit.sha.slice(0, 7)}`);
+        if (commit.impactSummary === 'Unable to analyze' || !commit.impactSummary) {
+          await Commit.findByIdAndUpdate(commit._id, {
+            aiMessage,
+            reviewComments,
+            impactScore: impact.score,
+            impactSummary: impact.summary,
+            aiStatus: 'complete'
+          });
+          console.log(`✅ Successfully re-analyzed & indexed ${commit.sha.slice(0, 7)}`);
+        } else {
+          console.log(`✅ Indexed ${commit.sha.slice(0, 7)} (Analysis already existed)`);
+        }
       } catch (err) {
         console.error(`❌ Failed to re-analyze ${commit.sha.slice(0, 7)}:`, err.message);
       }
