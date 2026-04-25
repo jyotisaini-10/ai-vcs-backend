@@ -9,35 +9,27 @@ function truncate(str, maxLen = 4000) {
   return str.slice(0, maxLen) + '\n... [truncated]'
 }
 
-// async function ask(prompt) {
-//   const res = await groq.chat.completions.create({
-//     model: 'llama-3.3-70b-versatile',
-//     max_tokens: 1000,
-//     messages: [{ role: 'user', content: prompt }]
-//   })
-//   return res.choices[0].message.content.trim()
-// }
 async function ask(prompt) {
-    try {
-        console.log("--- Sending Request to Groq ---");
-        const res = await groq.chat.completions.create({
-            model: 'llama-3.1-8b-instant',
-            max_tokens: 1000,
-            messages: [{ role: 'user', content: prompt }]
-        });
+  try {
+    console.log("--- Sending Request to Groq ---");
+    const res = await groq.chat.completions.create({
+      model: 'llama-3.1-8b-instant',
+      max_tokens: 1000,
+      messages: [{ role: 'user', content: prompt }]
+    });
 
-        if (!res.choices || res.choices.length === 0) {
-            throw new Error("Groq returned an empty response.");
-        }
-
-        console.log("--- AI Analysis Complete ---");
-        return res.choices[0].message.content.trim();
-
-    } catch (error) {
-        console.error("GROQ API ERROR:", error.message);
-        // Return a fallback message so the UI doesn't stay stuck
-        return "AI analysis unavailable at the moment."; 
+    if (!res.choices || res.choices.length === 0) {
+      throw new Error("Groq returned an empty response.");
     }
+
+    console.log("--- AI Analysis Complete ---");
+    return res.choices[0].message.content.trim();
+
+  } catch (error) {
+    console.error("GROQ API ERROR:", error.message);
+    // Return a fallback message so the UI doesn't stay stuck
+    return "AI analysis unavailable at the moment.";
+  }
 }
 
 export async function generateCommitMessage(diffs) {
@@ -126,4 +118,28 @@ export async function explainCode(code, filename) {
 \`\`\`
 ${truncate(code, 3000)}
 \`\`\``)
+}
+
+export async function generateRepoSummary(files) {
+  if (!files || files.length === 0) return { description: "No description provided.", summary: "No files provided for summary." }
+  const diffStr = files
+    .filter(f => f.content)
+    .map(f => `File: ${f.name}\n${truncate(f.content, 1000)}`)
+    .join('\n\n')
+  
+  const prompt = `You are an expert software developer. Based on the following source code files, generate a repository overview.
+Return ONLY valid JSON with no markdown, no explanation, and no code fences:
+{"description":"A short 1-2 sentence description of what the project is.","summary":"A detailed 3-4 sentence overview of the repository's main features, tech stack, and purpose. Write it as if it's the official repository README. Do NOT use phrases like 'Based on the provided source code...'."}
+
+FILES:
+${truncate(diffStr, 4000)}`
+
+  const text = await ask(prompt)
+  try {
+    const clean = text.replace(/\`\`\`json|\`\`\`/g, '').trim()
+    const match = clean.match(/\{[\s\S]*\}/)
+    return match ? JSON.parse(match[0]) : { description: "Unable to generate description", summary: "Unable to generate summary" }
+  } catch {
+    return { description: "Unable to generate description", summary: text }
+  }
 }

@@ -4,6 +4,7 @@ import User from '../models/User.js'
 import Commit from '../models/Commit.js'
 import { auth } from '../middleware/auth.js'
 import { initRepo, getBranches, getFileTree, readFile } from '../services/git/gitService.js'
+import { generateRepoSummary } from '../services/ai/aiService.js'
 
 const router = express.Router()
 
@@ -117,6 +118,43 @@ router.get('/:id/file', auth, async (req, res, next) => {
     }
 
     return res.status(404).json({ message: 'File not found' })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/repos/:id/summary
+router.post('/:id/summary', auth, async (req, res, next) => {
+  try {
+    let { files } = req.body
+    const repo = await Repo.findOne({ _id: req.params.id, owner: req.user._id })
+    if (!repo) return res.status(404).json({ message: 'Repository not found' })
+
+    if (!files || files.length === 0) {
+      try {
+        const fileTree = await getFileTree(req.params.id, repo.defaultBranch || 'main')
+        files = []
+        for (const filepath of fileTree) {
+          try {
+            const content = await readFile(req.params.id, filepath, repo.defaultBranch || 'main')
+            files.push({ name: filepath, content })
+          } catch (e) {
+            console.warn(`[repos summary] failed to read ${filepath}`)
+          }
+        }
+      } catch (e) {
+        console.warn(`[repos summary] failed to get file tree`)
+      }
+    }
+
+    const aiResult = await generateRepoSummary(files)
+    repo.aiSummary = aiResult.summary || aiResult
+    if (!repo.description || repo.description === '') {
+      repo.description = aiResult.description || ''
+    }
+    await repo.save()
+
+    res.json({ aiSummary: repo.aiSummary, description: repo.description })
   } catch (err) {
     next(err)
   }

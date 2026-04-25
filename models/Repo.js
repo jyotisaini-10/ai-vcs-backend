@@ -26,6 +26,10 @@ const RepoSchema = new Schema(
       default: '',
       maxlength: 500
     },
+    aiSummary: {
+      type: String,
+      default: ''
+    },
     defaultBranch: {
       type: String,
       default: 'main'
