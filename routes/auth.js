@@ -1,14 +1,20 @@
 import express from 'express'
 import jwt from 'jsonwebtoken'
 import crypto from 'crypto'
-import { Resend } from 'resend'
+import nodemailer from 'nodemailer'
 import User from '../models/User.js'
 import { auth } from '../middleware/auth.js'
 
 const router = express.Router()
 
-// Only initialize Resend if the API key is provided so it doesn't crash the entire server
-const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null
+// Configure Gmail Transporter
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  }
+})
 
 function signToken(userId) {
   return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' })
@@ -100,38 +106,36 @@ router.post('/forgot-password', async (req, res) => {
     console.log(resetUrl)
     console.log('-----------------------------------------')
 
-    if (!resend) {
-      console.warn('RESEND_API_KEY is missing. Reset link logged to console only.')
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+      console.warn('Gmail credentials missing in .env. Link logged to console only.')
       return res.json({ message: 'Development mode: Reset link has been logged to the server console.' })
     }
 
-    const { error } = await resend.emails.send({
-      from: 'AI-VCS <onboarding@resend.dev>',
-      to: [user.email],
+    const mailOptions = {
+      from: `"AI-VCS" <${process.env.EMAIL_USER}>`,
+      to: user.email,
       subject: 'Password Reset Request — AI-VCS',
       html: `
-        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px;background:#0d1117;color:#e6edf3;border-radius:12px;">
-          <h2 style="color:#a78bfa;margin-bottom:8px;">🔐 Reset your password</h2>
+        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px;background:#0d1117;color:#e6edf3;border-radius:12px;border:1px solid #30363d;">
+          <h2 style="color:#7c3aed;margin-bottom:8px;">🔐 Reset your password</h2>
           <p style="color:#8b949e;margin-bottom:24px;">You requested a password reset for your AI-VCS account.</p>
           <a href="${resetUrl}" style="display:inline-block;padding:12px 24px;background:#7c3aed;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;">Reset Password</a>
           <p style="color:#8b949e;margin-top:24px;font-size:13px;">This link expires in 1 hour. If you didn't request this, ignore this email.</p>
-          <p style="color:#6e7681;margin-top:8px;font-size:12px;">Or copy this link: ${resetUrl}</p>
+          <hr style="border:none;border-top:1px solid #30363d;margin:20px 0;">
+          <p style="color:#6e7681;font-size:12px;">Or copy this link: ${resetUrl}</p>
         </div>
       `
-    })
-
-    if (error) {
-      console.error('Resend email error:', error)
-      // If it's a sandbox error, don't fail the request, just tell the user to check console
-      if (error.message?.includes('testing emails')) {
-        return res.json({ 
-          message: 'Resend is in Sandbox mode. The reset link has been logged to your SERVER TERMINAL for testing.' 
-        })
-      }
-      return res.status(500).json({ message: error.message || 'Failed to send reset email.' })
     }
 
-    res.json({ message: 'If that email exists, a reset link has been sent.' })
+    try {
+      await transporter.sendMail(mailOptions)
+      res.json({ message: 'If that email exists, a reset link has been sent to your inbox.' })
+    } catch (error) {
+      console.error('Gmail error:', error)
+      res.json({ 
+        message: 'Failed to send email, but the reset link has been logged to the SERVER TERMINAL for you.' 
+      })
+    }
   } catch (err) {
     console.error('Forgot password error:', err)
     res.status(500).json({ message: 'Failed to send reset email. Check server email config.' })
