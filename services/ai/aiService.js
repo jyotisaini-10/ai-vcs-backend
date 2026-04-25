@@ -9,6 +9,23 @@ function truncate(str, maxLen = 4000) {
   return str.slice(0, maxLen) + '\n... [truncated]'
 }
 
+function parseAIJSON(text, fallback) {
+  try {
+    // 1. Try direct parse
+    return JSON.parse(text);
+  } catch (e) {
+    try {
+      // 2. Try to extract JSON between backticks or braces
+      const clean = text.replace(/```json|```/g, '').trim();
+      const match = clean.match(/[\{\[][\s\S]*[\}\]]/);
+      if (match) return JSON.parse(match[0]);
+    } catch (inner) {
+      console.error("Failed to parse AI JSON:", text.slice(0, 100));
+    }
+    return fallback;
+  }
+}
+
 async function ask(prompt) {
   try {
     console.log("--- Sending Request to Groq ---");
@@ -27,8 +44,7 @@ async function ask(prompt) {
 
   } catch (error) {
     console.error("GROQ API ERROR:", error.message);
-    // Return a fallback message so the UI doesn't stay stuck
-    return "AI analysis unavailable at the moment.";
+    return null; // Return null to indicate failure
   }
 }
 
@@ -60,14 +76,14 @@ Return [] if no issues found.
 CODE:
 ${truncate(diffStr, 3500)}`
   )
-  try {
-    const clean = text.replace(/\`\`\`json|\`\`\`/g, '').trim()
-    const match = clean.match(/\[[\s\S]*\]/)
-    return match ? JSON.parse(match[0]) : []
-  } catch { return [] }
+  if (!text) return []
+  return parseAIJSON(text, [])
 }
 
 export async function analyzeImpact(diffs) {
+  if (!diffs || diffs.length === 0) {
+    return { score: 1, summary: 'No changes detected to analyze.', risks: [] }
+  }
   const diffStr = diffs.map((d) => `File: ${d.file}\n${truncate(d.after, 600)}`).join('\n\n')
   const text = await ask(
     `Analyze the impact of these code changes.
@@ -78,11 +94,8 @@ Score must be 1-10 where 1=trivial change, 10=critical breaking change.
 CHANGES:
 ${truncate(diffStr, 2500)}`
   )
-  try {
-    const clean = text.replace(/\`\`\`json|\`\`\`/g, '').trim()
-    const match = clean.match(/\{[\s\S]*\}/)
-    return match ? JSON.parse(match[0]) : { score: 5, summary: 'Unable to analyze', risks: [] }
-  } catch { return { score: 5, summary: 'Unable to analyze', risks: [] } }
+  if (!text) return { score: 5, summary: 'AI service currently unavailable', risks: [] }
+  return parseAIJSON(text, { score: 5, summary: 'Unable to parse AI impact analysis', risks: [] })
 }
 
 export async function resolveConflict({ base, ours, theirs, filename }) {

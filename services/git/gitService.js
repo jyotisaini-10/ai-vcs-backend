@@ -181,7 +181,7 @@ export async function getCommitDiff(repoId, sha) {
       }
     })
   } catch (err) {
-    console.error('getDiff error:', err.message)
+    console.error(`[gitService] getCommitDiff error for repo ${repoId}, sha ${sha}:`, err.message)
   }
 
   return diffs

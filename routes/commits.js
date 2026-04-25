@@ -133,7 +133,17 @@ router.get('/:id/commits/:sha', auth, async (req, res, next) => {
 
     if (!commit) return res.status(404).json({ message: 'Commit not found' })
 
-    const diffs = await getCommitDiff(req.params.id, req.params.sha).catch(() => [])
+    let diffs = await getCommitDiff(req.params.id, req.params.sha).catch(() => [])
+    
+    // Fallback: If git diff is empty but we have file changes in the DB, use them
+    if (diffs.length === 0 && commit.filesChanged && commit.filesChanged.length > 0) {
+      diffs = commit.filesChanged.map(f => ({
+        file: f.filename,
+        before: '', // We don't have full history in DB for diffing, but we have the result
+        after: f.content || '',
+        type: f.status || 'added'
+      }))
+    }
 
     res.json({ commit, diffs })
   } catch (err) {
